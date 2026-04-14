@@ -11,10 +11,47 @@ Export results to DVA (Design Volume Analyzer) or use standalone.
 import streamlit as st
 import json
 from datetime import datetime
-from core.mesh_loader import load_3d_model
-from core.volume_calculator import calculate_volume_and_dimensions
-from core.preview_generator import create_3d_preview
-from core.scale_handler import apply_scale_factor, UNIT_CONVERSION_FACTORS
+import sys
+import os
+
+# Add current directory to Python path (fix for Streamlit Cloud)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# Try importing from core package, fall back to direct imports
+try:
+    from core.mesh_loader import load_3d_model
+    from core.volume_calculator import calculate_volume_and_dimensions
+    from core.preview_generator import create_3d_preview
+    from core.scale_handler import apply_scale_factor, UNIT_CONVERSION_FACTORS
+except ImportError:
+    # Fallback: try importing directly (if files are in same directory)
+    try:
+        from mesh_loader import load_3d_model
+        from volume_calculator import calculate_volume_and_dimensions
+        from preview_generator import create_3d_preview
+        from scale_handler import apply_scale_factor, UNIT_CONVERSION_FACTORS
+    except ImportError as e:
+        st.error(f"""
+        ❌ **Import Error**
+        
+        Cannot find required modules. Please check:
+        
+        1. **Folder structure on GitHub:**
+           - streamlit_app.py (root)
+           - core/ folder with:
+             - __init__.py
+             - mesh_loader.py
+             - volume_calculator.py
+             - preview_generator.py
+             - scale_handler.py
+        
+        2. **All files uploaded to GitHub**
+        
+        3. **Try redeploying on Streamlit Cloud**
+        
+        Error details: {str(e)}
+        """)
+        st.stop()
 
 # Page config
 st.set_page_config(
@@ -248,7 +285,6 @@ with tab2:
         if st.session_state.scale_factor != 1.0:
             if st.button("🔄 Reset to Original", use_container_width=True):
                 try:
-                    # Reload original file
                     st.session_state.scale_factor = 1.0
                     st.success("✅ Reset to original scale")
                     st.info("Please re-upload the file to reset completely")
