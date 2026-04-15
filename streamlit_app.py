@@ -31,7 +31,6 @@ try:
         UNIT_CONVERSION_FACTORS
     )
 except ImportError:
-    # Fallback: try importing directly (if files are in same directory)
     try:
         from mesh_loader import load_3d_model
         from volume_calculator import calculate_volume_and_dimensions
@@ -44,10 +43,8 @@ except ImportError:
             UNIT_CONVERSION_FACTORS
         )
     except ImportError:
-        # Try old scale_handler
         try:
             from core.scale_handler import apply_scale_factor, UNIT_CONVERSION_FACTORS
-            # Define missing functions as fallbacks
             def apply_non_uniform_scale(mesh, x, y, z):
                 mesh.apply_scale([x, y, z])
                 return mesh
@@ -63,22 +60,7 @@ except ImportError:
             st.error(f"""
             ❌ **Import Error**
             
-            Cannot find required modules. Please check:
-            
-            1. **Folder structure on GitHub:**
-               - streamlit_app.py (root)
-               - core/ folder with:
-                 - __init__.py
-                 - mesh_loader.py
-                 - volume_calculator.py
-                 - preview_generator.py
-                 - scale_handler_enhanced.py
-            
-            2. **All files uploaded to GitHub**
-            
-            3. **Try redeploying on Streamlit Cloud**
-            
-            Error details: {str(e)}
+            Cannot find required modules. Error: {str(e)}
             """)
             st.stop()
 
@@ -95,14 +77,18 @@ if 'model_data' not in st.session_state:
     st.session_state.model_data = None
 if 'scaled_mesh' not in st.session_state:
     st.session_state.scaled_mesh = None
-if 'scale_factor' not in st.session_state:
-    st.session_state.scale_factor = 1.0
+if 'original_mesh' not in st.session_state:
+    st.session_state.original_mesh = None
 if 'original_dimensions' not in st.session_state:
     st.session_state.original_dimensions = None
-if 'edit_mode' not in st.session_state:
-    st.session_state.edit_mode = False
-if 'proportional_scaling' not in st.session_state:
-    st.session_state.proportional_scaling = True
+if 'show_scale_controls' not in st.session_state:
+    st.session_state.show_scale_controls = False
+if 'temp_length' not in st.session_state:
+    st.session_state.temp_length = None
+if 'temp_width' not in st.session_state:
+    st.session_state.temp_width = None
+if 'temp_height' not in st.session_state:
+    st.session_state.temp_height = None
 
 # Header
 st.title("📐 3D Volume Calculator")
@@ -131,11 +117,11 @@ with st.sidebar:
     st.markdown("**Max file size:** 50 MB")
     st.markdown("**All units:** Millimeters (mm)")
 
-# Main content
-tab1, tab2, tab3 = st.tabs(["📁 Upload & Calculate", "🔧 Scale & Adjust", "📤 Export Results"])
+# Main content - Single tab now
+tab1, tab2 = st.tabs(["📁 Upload & Calculate", "📤 Export Results"])
 
 # ═══════════════════════════════════════════════════════════════════
-# TAB 1: UPLOAD & CALCULATE
+# TAB 1: UPLOAD & CALCULATE (with integrated scaling)
 # ═══════════════════════════════════════════════════════════════════
 
 with tab1:
@@ -167,15 +153,20 @@ with tab1:
                         'file_size': mesh_result['file_size'],
                         'timestamp': datetime.now().isoformat()
                     }
-                    st.session_state.scaled_mesh = mesh
-                    st.session_state.scale_factor = 1.0
+                    st.session_state.scaled_mesh = copy.deepcopy(mesh)
+                    st.session_state.original_mesh = copy.deepcopy(mesh)
                     
-                    # Store original dimensions for dimensional editing
+                    # Store original dimensions
                     st.session_state.original_dimensions = {
                         'length': calc_result['length_mm'],
                         'width': calc_result['width_mm'],
                         'height': calc_result['height_mm']
                     }
+                    
+                    # Initialize temp dimensions
+                    st.session_state.temp_length = calc_result['length_mm']
+                    st.session_state.temp_width = calc_result['width_mm']
+                    st.session_state.temp_height = calc_result['height_mm']
                     
                     st.success(f"✅ Model loaded: {uploaded_file.name}")
                 else:
@@ -225,11 +216,259 @@ with tab1:
             st.write(f"**Triangles:** {data['triangles']:,}")
             st.write(f"**Vertices:** {data['vertices']:,}")
         
-        # 3D Preview
+        # ═══════════════════════════════════════════════════════════════
+        # SCALE & RESIZE SECTION (Integrated)
+        # ═══════════════════════════════════════════════════════════════
+        
         st.markdown("---")
-        if st.checkbox("🎨 Show 3D Preview", value=False):
+        
+        # Button to show/hide scale controls
+        if st.button("🔧 Scale & Resize Model" if not st.session_state.show_scale_controls else "✕ Close Scale Controls", 
+                     use_container_width=True):
+            st.session_state.show_scale_controls = not st.session_state.show_scale_controls
+            st.rerun()
+        
+        # Show scale controls if enabled
+        if st.session_state.show_scale_controls:
+            st.markdown("### 🔧 Scale & Resize Model")
+            
+            # Method selection
+            scale_method = st.radio(
+                "Scaling Method:",
+                ["Edit Dimensions", "Scale Factor", "Unit Conversion"],
+                horizontal=True,
+                key="scale_method_radio"
+            )
+            
+            st.markdown("---")
+            
+            # ═══════════════════════════════════════════════════════
+            # METHOD 1: EDIT DIMENSIONS (Default, Most Powerful)
+            # ═══════════════════════════════════════════════════════
+            
+            if scale_method == "Edit Dimensions":
+                st.markdown("**Edit Dimensions Directly**")
+                
+                # Proportional checkbox
+                proportional = st.checkbox(
+                    "🔗 Proportional Scaling",
+                    value=True,
+                    help="Maintain shape proportions",
+                    key="proportional_check"
+                )
+                
+                # Get current dimensions
+                current_length = data['length_mm']
+                current_width = data['width_mm']
+                current_height = data['height_mm']
+                
+                # Dimension inputs
+                col_dim1, col_dim2, col_dim3 = st.columns(3)
+                
+                with col_dim1:
+                    st.markdown("**📏 Length (X)**")
+                    new_length = st.number_input(
+                        "Length (mm)",
+                        min_value=0.01,
+                        max_value=10000.0,
+                        value=float(current_length),
+                        step=0.1,
+                        format="%.2f",
+                        key="dim_length",
+                        label_visibility="collapsed"
+                    )
+                
+                # Calculate proportional dimensions if length changed
+                if proportional and new_length != current_length:
+                    scale_ratio = new_length / current_length
+                    calculated_width = current_width * scale_ratio
+                    calculated_height = current_height * scale_ratio
+                else:
+                    calculated_width = current_width
+                    calculated_height = current_height
+                
+                with col_dim2:
+                    st.markdown("**📏 Width (Y)**")
+                    if proportional and new_length != current_length:
+                        # Show calculated value, make it editable but update it
+                        new_width = st.number_input(
+                            "Width (mm)",
+                            min_value=0.01,
+                            max_value=10000.0,
+                            value=float(calculated_width),
+                            step=0.1,
+                            format="%.2f",
+                            key="dim_width",
+                            label_visibility="collapsed",
+                            disabled=True
+                        )
+                    else:
+                        new_width = st.number_input(
+                            "Width (mm)",
+                            min_value=0.01,
+                            max_value=10000.0,
+                            value=float(current_width),
+                            step=0.1,
+                            format="%.2f",
+                            key="dim_width",
+                            label_visibility="collapsed"
+                        )
+                
+                with col_dim3:
+                    st.markdown("**📏 Height (Z)**")
+                    if proportional and new_length != current_length:
+                        # Show calculated value
+                        new_height = st.number_input(
+                            "Height (mm)",
+                            min_value=0.01,
+                            max_value=10000.0,
+                            value=float(calculated_height),
+                            step=0.1,
+                            format="%.2f",
+                            key="dim_height",
+                            label_visibility="collapsed",
+                            disabled=True
+                        )
+                    else:
+                        new_height = st.number_input(
+                            "Height (mm)",
+                            min_value=0.01,
+                            max_value=10000.0,
+                            value=float(current_height),
+                            step=0.1,
+                            format="%.2f",
+                            key="dim_height",
+                            label_visibility="collapsed"
+                        )
+                
+                # Show changes preview
+                st.markdown("---")
+                st.markdown("**Preview Changes:**")
+                
+                x_scale = new_length / current_length
+                y_scale = new_width / current_width
+                z_scale = new_height / current_height
+                volume_scale = x_scale * y_scale * z_scale
+                new_volume = data['volume_mm3'] * volume_scale
+                new_volume_cm3 = new_volume / 1000
+                
+                col_p1, col_p2, col_p3 = st.columns(3)
+                
+                with col_p1:
+                    st.metric("New Length", f"{new_length:.2f} mm", f"{(x_scale-1)*100:+.1f}%")
+                with col_p2:
+                    st.metric("New Width", f"{new_width:.2f} mm", f"{(y_scale-1)*100:+.1f}%")
+                with col_p3:
+                    st.metric("New Height", f"{new_height:.2f} mm", f"{(z_scale-1)*100:+.1f}%")
+                
+                st.metric("New Volume", f"{new_volume_cm3:.2f} cm³", f"{(volume_scale-1)*100:+.1f}%")
+                
+                # Warning for non-proportional
+                if not proportional and (abs(x_scale - y_scale) > 0.001 or abs(y_scale - z_scale) > 0.001):
+                    st.warning("⚠️ **Non-proportional scaling** - Model will be distorted!")
+                
+                # Apply button
+                if st.button("✓ Apply New Dimensions", use_container_width=True, type="primary", key="apply_dims"):
+                    try:
+                        # Create fresh copy from original
+                        scaled_mesh = copy.deepcopy(st.session_state.original_mesh)
+                        
+                        # Apply scaling
+                        scaled_mesh = apply_non_uniform_scale(scaled_mesh, x_scale, y_scale, z_scale)
+                        
+                        # Recalculate
+                        calc_result = calculate_volume_and_dimensions(scaled_mesh)
+                        
+                        # Update session state
+                        st.session_state.model_data.update(calc_result)
+                        st.session_state.scaled_mesh = scaled_mesh
+                        
+                        st.success("✅ Dimensions applied!")
+                        st.rerun()
+                        
+                    except Exception as e:
+                        st.error(f"Error: {str(e)}")
+            
+            # ═══════════════════════════════════════════════════════
+            # METHOD 2: SCALE FACTOR
+            # ═══════════════════════════════════════════════════════
+            
+            elif scale_method == "Scale Factor":
+                st.markdown("**Uniform Scale Factor**")
+                
+                scale_factor = st.number_input(
+                    "Scale factor (1.0 = no change)",
+                    min_value=0.01,
+                    max_value=100.0,
+                    value=1.0,
+                    step=0.1,
+                    format="%.2f",
+                    key="scale_factor_input"
+                )
+                
+                st.caption(f"= {scale_factor*100:.0f}% of current size")
+                
+                if st.button("✓ Apply Scale Factor", use_container_width=True, type="primary", key="apply_scale"):
+                    try:
+                        scaled_mesh = copy.deepcopy(st.session_state.original_mesh)
+                        
+                        # Calculate total scale from original
+                        current_length = data['length_mm']
+                        original_length = st.session_state.original_dimensions['length']
+                        current_scale = current_length / original_length
+                        total_scale = current_scale * scale_factor
+                        
+                        scaled_mesh = apply_scale_factor(scaled_mesh, total_scale)
+                        calc_result = calculate_volume_and_dimensions(scaled_mesh)
+                        
+                        st.session_state.model_data.update(calc_result)
+                        st.session_state.scaled_mesh = scaled_mesh
+                        
+                        st.success(f"✅ Scaled {scale_factor:.2f}x")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error: {str(e)}")
+            
+            # ═══════════════════════════════════════════════════════
+            # METHOD 3: UNIT CONVERSION
+            # ═══════════════════════════════════════════════════════
+            
+            elif scale_method == "Unit Conversion":
+                st.markdown("**Unit Conversion**")
+                
+                from_unit = st.selectbox(
+                    "File is in:",
+                    ["millimeters", "centimeters", "inches", "meters"],
+                    index=0,
+                    key="unit_select"
+                )
+                
+                conversion_factor = UNIT_CONVERSION_FACTORS[from_unit]
+                st.caption(f"Will multiply by {conversion_factor} to convert to mm")
+                
+                if st.button("✓ Apply Conversion", use_container_width=True, type="primary", key="apply_unit"):
+                    try:
+                        scaled_mesh = copy.deepcopy(st.session_state.original_mesh)
+                        scaled_mesh = apply_scale_factor(scaled_mesh, conversion_factor)
+                        calc_result = calculate_volume_and_dimensions(scaled_mesh)
+                        
+                        st.session_state.model_data.update(calc_result)
+                        st.session_state.scaled_mesh = scaled_mesh
+                        
+                        st.success(f"✅ Converted from {from_unit} to mm")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error: {str(e)}")
+        
+        # ═══════════════════════════════════════════════════════════════
+        # 3D PREVIEW (Shows scaled model)
+        # ═══════════════════════════════════════════════════════════════
+        
+        st.markdown("---")
+        if st.checkbox("🎨 Show 3D Preview", value=False, key="show_preview"):
             try:
                 with st.spinner("Generating 3D preview..."):
+                    # Show the current scaled mesh
                     fig = create_3d_preview(st.session_state.scaled_mesh)
                     st.plotly_chart(fig, use_container_width=True)
             except Exception as e:
@@ -239,335 +478,10 @@ with tab1:
 
 
 # ═══════════════════════════════════════════════════════════════════
-# TAB 2: SCALE & ADJUST
+# TAB 2: EXPORT RESULTS
 # ═══════════════════════════════════════════════════════════════════
 
 with tab2:
-    st.header("🔧 Scale & Resize Model")
-    
-    if st.session_state.model_data is None:
-        st.info("Upload a 3D model first (see Upload & Calculate tab)")
-    else:
-        st.markdown("""
-        Adjust the model using:
-        - **Scale Factor:** Uniform scaling (proportional)
-        - **Unit Conversion:** Change measurement units
-        - **Dimensional Editing:** Set exact dimensions (proportional or distorted)
-        """)
-        
-        st.markdown("---")
-        
-        # Scale method selection
-        scale_method = st.radio(
-            "Scaling Method:",
-            ["Scale Factor", "Unit Conversion", "Edit Dimensions"],
-            horizontal=True
-        )
-        
-        # ═══════════════════════════════════════════════════════════════
-        # METHOD 1: SCALE FACTOR
-        # ═══════════════════════════════════════════════════════════════
-        
-        if scale_method == "Scale Factor":
-            st.markdown("**Uniform Scale Factor**")
-            st.markdown("Enter a multiplier (1.0 = no change, 2.0 = double, 0.5 = half)")
-            
-            scale_factor = st.number_input(
-                "Scale factor",
-                min_value=0.01,
-                max_value=100.0,
-                value=1.0,
-                step=0.1,
-                format="%.2f",
-                key="scale_factor_input"
-            )
-            
-            percentage = scale_factor * 100
-            st.caption(f"= {percentage:.0f}% of current size")
-            
-            if st.button("✓ Apply Scale Factor", use_container_width=True, type="primary"):
-                try:
-                    import copy
-                    # Apply uniform scale
-                    scaled_mesh = copy.deepcopy(st.session_state.scaled_mesh)
-                    scaled_mesh = apply_scale_factor(scaled_mesh, scale_factor)
-                    
-                    # Recalculate
-                    calc_result = calculate_volume_and_dimensions(scaled_mesh)
-                    
-                    # Update session state
-                    st.session_state.model_data.update(calc_result)
-                    st.session_state.scaled_mesh = scaled_mesh
-                    
-                    st.success(f"✅ Scale applied: {scale_factor:.2f}x")
-                    st.rerun()
-                    
-                except Exception as e:
-                    st.error(f"Error applying scale: {str(e)}")
-        
-        # ═══════════════════════════════════════════════════════════════
-        # METHOD 2: UNIT CONVERSION
-        # ═══════════════════════════════════════════════════════════════
-        
-        elif scale_method == "Unit Conversion":
-            st.markdown("**Unit Conversion**")
-            st.markdown("Specify what units the file is actually in")
-            
-            from_unit = st.selectbox(
-                "File is in:",
-                ["millimeters", "centimeters", "inches", "meters"],
-                index=0,
-                key="unit_conversion_select"
-            )
-            
-            to_unit = "millimeters"
-            
-            conversion_factor = UNIT_CONVERSION_FACTORS[from_unit]
-            
-            st.caption(f"Will multiply by {conversion_factor} to convert to mm")
-            
-            if st.button("✓ Apply Unit Conversion", use_container_width=True, type="primary"):
-                try:
-                    import copy
-                    # Apply conversion
-                    scaled_mesh = copy.deepcopy(st.session_state.scaled_mesh)
-                    scaled_mesh = apply_scale_factor(scaled_mesh, conversion_factor)
-                    
-                    # Recalculate
-                    calc_result = calculate_volume_and_dimensions(scaled_mesh)
-                    
-                    # Update session state
-                    st.session_state.model_data.update(calc_result)
-                    st.session_state.scaled_mesh = scaled_mesh
-                    
-                    st.success(f"✅ Converted from {from_unit} to {to_unit}")
-                    st.rerun()
-                    
-                except Exception as e:
-                    st.error(f"Error converting units: {str(e)}")
-        
-        # ═══════════════════════════════════════════════════════════════
-        # METHOD 3: DIMENSIONAL EDITING (NEW!)
-        # ═══════════════════════════════════════════════════════════════
-        
-        elif scale_method == "Edit Dimensions":
-            st.markdown("**Edit Dimensions Directly**")
-            st.markdown("Set exact dimensions in millimeters")
-            
-            # Current dimensions
-            data = st.session_state.model_data
-            current_length = data['length_mm']
-            current_width = data['width_mm']
-            current_height = data['height_mm']
-            
-            # Proportional scaling checkbox
-            proportional = st.checkbox(
-                "🔗 Proportional Scaling",
-                value=True,
-                help="When checked, changing one dimension scales others proportionally. When unchecked, allows distortion."
-            )
-            
-            st.markdown("---")
-            
-            # Dimension editing section
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
-                st.markdown("**📏 Length (X)**")
-                new_length = st.number_input(
-                    "Length (mm)",
-                    min_value=0.01,
-                    max_value=10000.0,
-                    value=float(current_length),
-                    step=0.1,
-                    format="%.2f",
-                    key="edit_length",
-                    label_visibility="collapsed"
-                )
-                st.caption(f"Current: {current_length:.2f} mm")
-            
-            with col2:
-                st.markdown("**📏 Width (Y)**")
-                
-                # If proportional and length changed, calculate proportional width
-                if proportional and new_length != current_length:
-                    proportional_width = calculate_proportional_dimension(
-                        new_length, current_length, current_width
-                    )
-                    new_width = st.number_input(
-                        "Width (mm)",
-                        min_value=0.01,
-                        max_value=10000.0,
-                        value=float(proportional_width),
-                        step=0.1,
-                        format="%.2f",
-                        key="edit_width",
-                        label_visibility="collapsed",
-                        disabled=True  # Disabled when proportional
-                    )
-                else:
-                    new_width = st.number_input(
-                        "Width (mm)",
-                        min_value=0.01,
-                        max_value=10000.0,
-                        value=float(current_width),
-                        step=0.1,
-                        format="%.2f",
-                        key="edit_width",
-                        label_visibility="collapsed"
-                    )
-                st.caption(f"Current: {current_width:.2f} mm")
-            
-            with col3:
-                st.markdown("**📏 Height (Z)**")
-                
-                # If proportional and length changed, calculate proportional height
-                if proportional and new_length != current_length:
-                    proportional_height = calculate_proportional_dimension(
-                        new_length, current_length, current_height
-                    )
-                    new_height = st.number_input(
-                        "Height (mm)",
-                        min_value=0.01,
-                        max_value=10000.0,
-                        value=float(proportional_height),
-                        step=0.1,
-                        format="%.2f",
-                        key="edit_height",
-                        label_visibility="collapsed",
-                        disabled=True  # Disabled when proportional
-                    )
-                else:
-                    new_height = st.number_input(
-                        "Height (mm)",
-                        min_value=0.01,
-                        max_value=10000.0,
-                        value=float(current_height),
-                        step=0.1,
-                        format="%.2f",
-                        key="edit_height",
-                        label_visibility="collapsed"
-                    )
-                st.caption(f"Current: {current_height:.2f} mm")
-            
-            # Show scale factors that will be applied
-            st.markdown("---")
-            st.markdown("**Preview Changes:**")
-            
-            x_scale = new_length / current_length if current_length > 0 else 1.0
-            y_scale = new_width / current_width if current_width > 0 else 1.0
-            z_scale = new_height / current_height if current_height > 0 else 1.0
-            
-            # Calculate new volume estimate
-            volume_scale = x_scale * y_scale * z_scale
-            estimated_volume = data['volume_mm3'] * volume_scale
-            estimated_volume_cm3 = estimated_volume / 1000
-            
-            col_preview1, col_preview2, col_preview3 = st.columns(3)
-            
-            with col_preview1:
-                st.metric(
-                    "Length Change",
-                    f"{new_length:.2f} mm",
-                    f"{(x_scale - 1) * 100:+.1f}%"
-                )
-            
-            with col_preview2:
-                st.metric(
-                    "Width Change",
-                    f"{new_width:.2f} mm",
-                    f"{(y_scale - 1) * 100:+.1f}%"
-                )
-            
-            with col_preview3:
-                st.metric(
-                    "Height Change",
-                    f"{new_height:.2f} mm",
-                    f"{(z_scale - 1) * 100:+.1f}%"
-                )
-            
-            # Volume preview
-            st.markdown("**Estimated New Volume:**")
-            current_vol_cm3 = data['volume_mm3'] / 1000
-            st.metric(
-                "Volume",
-                f"{estimated_volume_cm3:.2f} cm³",
-                f"{(volume_scale - 1) * 100:+.1f}%"
-            )
-            
-            # Warning if non-proportional
-            if not proportional and (x_scale != y_scale or y_scale != z_scale or x_scale != z_scale):
-                st.warning("⚠️ **Non-proportional scaling will distort the model!** The shape will change.")
-            
-            # Apply button
-            if st.button("✓ Apply Dimensions", use_container_width=True, type="primary"):
-                try:
-                    import copy
-                    # Apply dimensional scale
-                    scaled_mesh = copy.deepcopy(st.session_state.scaled_mesh)
-                    
-                    current_dims = {
-                        'length': current_length,
-                        'width': current_width,
-                        'height': current_height
-                    }
-                    
-                    target_dims = {
-                        'length': new_length,
-                        'width': new_width,
-                        'height': new_height
-                    }
-                    
-                    scaled_mesh, scales = apply_dimensional_scale(
-                        scaled_mesh,
-                        current_dims,
-                        target_dims,
-                        proportional=proportional
-                    )
-                    
-                    # Recalculate volume
-                    calc_result = calculate_volume_and_dimensions(scaled_mesh)
-                    
-                    # Update session state
-                    st.session_state.model_data.update(calc_result)
-                    st.session_state.scaled_mesh = scaled_mesh
-                    
-                    scaling_type = "proportionally" if proportional else "non-proportionally (distorted)"
-                    st.success(f"✅ Dimensions applied {scaling_type}!")
-                    st.rerun()
-                    
-                except Exception as e:
-                    st.error(f"Error applying dimensions: {str(e)}")
-        
-        # ═══════════════════════════════════════════════════════════════
-        # CURRENT VALUES DISPLAY (All Methods)
-        # ═══════════════════════════════════════════════════════════════
-        
-        st.markdown("---")
-        st.markdown("### 📊 Current Model Values")
-        
-        data = st.session_state.model_data
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            volume_cm3 = data['volume_mm3'] / 1000
-            st.metric("Volume", f"{volume_cm3:,.2f} cm³")
-        
-        with col2:
-            st.metric("Length", f"{data['length_mm']:.2f} mm")
-        
-        with col3:
-            st.metric("Width", f"{data['width_mm']:.2f} mm")
-        
-        with col4:
-            st.metric("Height", f"{data['height_mm']:.2f} mm")
-
-
-# ═══════════════════════════════════════════════════════════════════
-# TAB 3: EXPORT RESULTS
-# ═══════════════════════════════════════════════════════════════════
-
-with tab3:
     st.header("📤 Export Results")
     
     if st.session_state.model_data is None:
@@ -606,7 +520,6 @@ with tab3:
                 'triangles': data['triangles'],
                 'vertices': data['vertices']
             },
-            'scale_factor': st.session_state.scale_factor,
             'timestamp': data['timestamp']
         }
         
