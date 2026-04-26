@@ -15,6 +15,15 @@ import sys
 import os
 import copy
 
+# Optional textured-renderer stack (PyVista + stpyvista).
+# Falls back to Plotly if either isn't installed in this environment.
+try:
+    from stpyvista import stpyvista
+    import pyvista as _pv  # noqa: F401  (import-side validation only)
+    HAS_PYVISTA = True
+except Exception:
+    HAS_PYVISTA = False
+
 # Add current directory to Python path (fix for Streamlit Cloud)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -22,9 +31,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
     from core.mesh_loader import load_3d_model
     from core.volume_calculator import calculate_volume_and_dimensions
-    from core.preview_generator import create_3d_preview
+    from core.preview_generator import create_3d_preview, create_pyvista_preview
     from core.scale_handler_enhanced import (
-        apply_scale_factor, 
+        apply_scale_factor,
         apply_non_uniform_scale,
         apply_dimensional_scale,
         calculate_proportional_dimension,
@@ -34,7 +43,7 @@ except ImportError:
     try:
         from mesh_loader import load_3d_model
         from volume_calculator import calculate_volume_and_dimensions
-        from preview_generator import create_3d_preview
+        from preview_generator import create_3d_preview, create_pyvista_preview
         from scale_handler_enhanced import (
             apply_scale_factor,
             apply_non_uniform_scale,
@@ -178,43 +187,42 @@ with tab1:
     # Display results if model loaded
     if st.session_state.model_data:
         st.markdown("---")
-        st.header("📊 Calculated Results")
-        
         data = st.session_state.model_data
-        
-        # Metrics
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            volume_cm3 = data['volume_mm3'] / 1000
-            st.metric("Volume", f"{volume_cm3:,.2f} cm³")
-        
-        with col2:
-            st.metric("Length", f"{data['length_mm']:.2f} mm")
-        
-        with col3:
-            st.metric("Width", f"{data['width_mm']:.2f} mm")
-        
-        with col4:
-            st.metric("Height", f"{data['height_mm']:.2f} mm")
-        
-        # Detailed info
-        st.markdown("---")
-        col_info1, col_info2 = st.columns(2)
-        
-        with col_info1:
-            st.markdown("**📁 File Information**")
-            st.write(f"**Filename:** {data['filename']}")
-            st.write(f"**Format:** {data['format']}")
-            st.write(f"**File size:** {data['file_size']/(1024*1024):.2f} MB")
-        
-        with col_info2:
-            st.markdown("**🔍 Mesh Quality**")
-            watertight_icon = "✓" if data['is_watertight'] else "✗"
-            watertight_text = "Yes (exact volume)" if data['is_watertight'] else "No (approximate)"
-            st.write(f"**Watertight:** {watertight_icon} {watertight_text}")
-            st.write(f"**Triangles:** {data['triangles']:,}")
-            st.write(f"**Vertices:** {data['vertices']:,}")
+
+        with st.expander("📊 Calculated Results", expanded=True):
+            # Metrics
+            col1, col2, col3, col4 = st.columns(4)
+
+            with col1:
+                volume_cm3 = data['volume_mm3'] / 1000
+                st.metric("Volume", f"{volume_cm3:,.2f} cm³")
+
+            with col2:
+                st.metric("Length", f"{data['length_mm']:.2f} mm")
+
+            with col3:
+                st.metric("Width", f"{data['width_mm']:.2f} mm")
+
+            with col4:
+                st.metric("Height", f"{data['height_mm']:.2f} mm")
+
+            # Detailed info
+            st.markdown("---")
+            col_info1, col_info2 = st.columns(2)
+
+            with col_info1:
+                st.markdown("**📁 File Information**")
+                st.write(f"**Filename:** {data['filename']}")
+                st.write(f"**Format:** {data['format']}")
+                st.write(f"**File size:** {data['file_size']/(1024*1024):.2f} MB")
+
+            with col_info2:
+                st.markdown("**🔍 Mesh Quality**")
+                watertight_icon = "✓" if data['is_watertight'] else "✗"
+                watertight_text = "Yes (exact volume)" if data['is_watertight'] else "No (approximate)"
+                st.write(f"**Watertight:** {watertight_icon} {watertight_text}")
+                st.write(f"**Triangles:** {data['triangles']:,}")
+                st.write(f"**Vertices:** {data['vertices']:,}")
         
         # ═══════════════════════════════════════════════════════════════
         # SCALE & RESIZE SECTION (Integrated)
@@ -465,14 +473,32 @@ with tab1:
         # ═══════════════════════════════════════════════════════════════
         
         st.markdown("---")
-        if st.checkbox("🎨 Show 3D Preview", value=False, key="show_preview"):
+        if st.checkbox("🎨 Show 3D Preview", value=True, key="show_preview"):
+            mesh_to_preview = st.session_state.scaled_mesh
             try:
                 with st.spinner("Generating 3D preview..."):
-                    # Show the current scaled mesh
-                    fig = create_3d_preview(st.session_state.scaled_mesh)
-                    st.plotly_chart(fig, use_container_width=True)
+                    if HAS_PYVISTA:
+                        plotter = create_pyvista_preview(mesh_to_preview)
+                        stpyvista(plotter, key="pv-preview", use_container_width=True)
+                    else:
+                        st.info(
+                            "ℹ️ Texture-capable renderer (PyVista) not installed — "
+                            "falling back to flat-shaded preview. "
+                            "Run `pip install -r requirements.txt` to enable textures."
+                        )
+                        fig = create_3d_preview(mesh_to_preview)
+                        st.plotly_chart(fig, use_container_width=True)
             except Exception as e:
-                st.error(f"Error generating preview: {str(e)}")
+                # If the textured path crashes (e.g. malformed UVs), fall back to Plotly.
+                if HAS_PYVISTA:
+                    st.warning(f"Textured preview failed ({e}); using flat-shaded fallback.")
+                    try:
+                        fig = create_3d_preview(mesh_to_preview)
+                        st.plotly_chart(fig, use_container_width=True)
+                    except Exception as e2:
+                        st.error(f"Error generating preview: {str(e2)}")
+                else:
+                    st.error(f"Error generating preview: {str(e)}")
     else:
         st.info("👆 Upload a 3D model to get started")
 

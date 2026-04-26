@@ -9,7 +9,10 @@ numpy>=1.24.0
 networkx>=2.8
 
 # Visualization
-plotly>=5.14.0
+plotly>=5.14.0          # Fallback flat-shaded preview
+pyvista>=0.43.0         # Textured PBR preview (wraps VTK)
+stpyvista>=0.1.5        # Streamlit bridge for PyVista
+pillow>=9.0.0           # Texture image decoding (already a trimesh dep, pinned for clarity)
 
 # Optional but recommended
 pygltflib>=1.15.0  # Better GLB/GLTF support
