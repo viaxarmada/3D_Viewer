@@ -3,15 +3,123 @@
 ============================
 Generate interactive 3D previews.
 
-Primary renderer: PyVista (VTK) — supports textured PBR materials from
-GLB/GLTF and OBJ+MTL.
+Primary renderer: Google's <model-viewer> web component, embedded via
+HTML. Renders GLB/GLTF directly — supports PBR textures, normal maps,
+and embedded animations. Non-GLB inputs are converted to GLB on the fly
+through trimesh so they share the same render path.
 
-Fallback renderer: Plotly Mesh3d — solid color only, used if PyVista
-isn't available.
+Legacy helpers retained for offline / non-CDN environments:
+  - create_pyvista_preview / trimesh_to_pyvista (textured, server-rendered)
+  - create_3d_preview / create_wireframe_preview (Plotly, flat-shaded)
 """
+
+import base64
 
 import numpy as np
 import plotly.graph_objects as go
+
+
+# ── Active renderer: Google <model-viewer> ──────────────────────────────────
+
+def create_model_viewer_html(
+    glb_bytes,
+    height=550,
+    autoplay=True,
+    auto_rotate=False,
+    background='#f5f5f5',
+):
+    """
+    Build an HTML document that renders the given GLB bytes via Google's
+    <model-viewer> web component.
+
+    Capabilities:
+      - PBR textures (baseColor, metallicRoughness, normal, emissive,
+        occlusion) — full texture support.
+      - Embedded animations from GLB/GLTF — autoplays by default.
+      - Mouse orbit + scroll zoom + pinch on touch.
+
+    Args:
+        glb_bytes: bytes of a valid GLB file.
+        height: int, viewer height in CSS pixels.
+        autoplay: bool, autoplay embedded animations.
+        auto_rotate: bool, slowly rotate the camera. Off when there's
+            an animation to play, since the two compete visually.
+        background: CSS color string for the viewer backdrop.
+
+    Returns:
+        str: a self-contained HTML document suitable for
+        streamlit.components.v1.html().
+    """
+    b64 = base64.b64encode(glb_bytes).decode('ascii')
+
+    autoplay_attr = 'autoplay' if autoplay else ''
+    auto_rotate_attr = 'auto-rotate auto-rotate-delay="2000"' if auto_rotate else ''
+
+    return f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script type="module"
+          src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.5.0/model-viewer.min.js">
+  </script>
+  <style>
+    body, html {{
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      background: {background};
+      font-family: system-ui, sans-serif;
+    }}
+    model-viewer {{
+      width: 100%;
+      height: {height}px;
+      background-color: {background};
+      --poster-color: {background};
+    }}
+    .hint {{
+      position: absolute;
+      bottom: 8px;
+      left: 12px;
+      font-size: 11px;
+      color: #888;
+      pointer-events: none;
+    }}
+  </style>
+</head>
+<body>
+  <model-viewer
+    src="data:model/gltf-binary;base64,{b64}"
+    alt="3D model preview"
+    camera-controls
+    touch-action="pan-y"
+    {autoplay_attr}
+    {auto_rotate_attr}
+    shadow-intensity="1"
+    exposure="1.0"
+    environment-image="neutral"
+  ></model-viewer>
+  <div class="hint">drag to orbit · scroll to zoom · animations autoplay</div>
+</body>
+</html>"""
+
+
+def trimesh_to_glb_bytes(mesh):
+    """
+    Export a trimesh mesh (or scene) to GLB bytes for use with
+    <model-viewer>. Embeds textures present on the mesh's visual; cannot
+    embed animations (those exist at the scene level and are stripped
+    upstream by mesh_loader.dump(concatenate=True)).
+
+    Args:
+        mesh: trimesh.Trimesh or trimesh.Scene.
+
+    Returns:
+        bytes: a valid GLB binary.
+    """
+    return mesh.export(file_type='glb')
+
+
+# ── Legacy helpers (not called from the active preview path) ────────────────
 
 
 def trimesh_to_pyvista(mesh):

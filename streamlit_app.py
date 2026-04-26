@@ -9,20 +9,12 @@ Export results to DVA (Design Volume Analyzer) or use standalone.
 """
 
 import streamlit as st
+import streamlit.components.v1 as components
 import json
 from datetime import datetime
 import sys
 import os
 import copy
-
-# Optional textured-renderer stack (PyVista + stpyvista).
-# Falls back to Plotly if either isn't installed in this environment.
-try:
-    from stpyvista import stpyvista
-    import pyvista as _pv  # noqa: F401  (import-side validation only)
-    HAS_PYVISTA = True
-except Exception:
-    HAS_PYVISTA = False
 
 # Add current directory to Python path (fix for Streamlit Cloud)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -31,7 +23,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
     from core.mesh_loader import load_3d_model
     from core.volume_calculator import calculate_volume_and_dimensions
-    from core.preview_generator import create_3d_preview, create_pyvista_preview
+    from core.preview_generator import (
+        create_3d_preview,
+        create_model_viewer_html,
+        trimesh_to_glb_bytes,
+    )
     from core.scale_handler_enhanced import (
         apply_scale_factor,
         apply_non_uniform_scale,
@@ -43,7 +39,11 @@ except ImportError:
     try:
         from mesh_loader import load_3d_model
         from volume_calculator import calculate_volume_and_dimensions
-        from preview_generator import create_3d_preview, create_pyvista_preview
+        from preview_generator import (
+            create_3d_preview,
+            create_model_viewer_html,
+            trimesh_to_glb_bytes,
+        )
         from scale_handler_enhanced import (
             apply_scale_factor,
             apply_non_uniform_scale,
@@ -98,6 +98,17 @@ if 'temp_width' not in st.session_state:
     st.session_state.temp_width = None
 if 'temp_height' not in st.session_state:
     st.session_state.temp_height = None
+# Raw bytes + ext of the uploaded file. Used by the <model-viewer> preview
+# so unmodified GLB uploads keep their embedded animations.
+if 'original_file_bytes' not in st.session_state:
+    st.session_state.original_file_bytes = None
+if 'original_file_ext' not in st.session_state:
+    st.session_state.original_file_ext = None
+# Set True once the user applies any scale/resize. Drives whether the
+# preview uses the raw original bytes (animations) vs. a re-exported GLB
+# of the scaled mesh (no animations).
+if 'was_scaled' not in st.session_state:
+    st.session_state.was_scaled = False
 
 # Header
 st.title("📐 3D Volume Calculator")
@@ -164,6 +175,9 @@ with tab1:
                     }
                     st.session_state.scaled_mesh = copy.deepcopy(mesh)
                     st.session_state.original_mesh = copy.deepcopy(mesh)
+                    st.session_state.original_file_bytes = mesh_result.get('file_bytes')
+                    st.session_state.original_file_ext = (mesh_result.get('file_ext') or '').lower()
+                    st.session_state.was_scaled = False
                     
                     # Store original dimensions
                     st.session_state.original_dimensions = {
@@ -390,6 +404,7 @@ with tab1:
                         # Update session state
                         st.session_state.model_data.update(calc_result)
                         st.session_state.scaled_mesh = scaled_mesh
+                        st.session_state.was_scaled = True
                         
                         st.success("✅ Dimensions applied!")
                         st.rerun()
@@ -431,6 +446,7 @@ with tab1:
                         
                         st.session_state.model_data.update(calc_result)
                         st.session_state.scaled_mesh = scaled_mesh
+                        st.session_state.was_scaled = True
                         
                         st.success(f"✅ Scaled {scale_factor:.2f}x")
                         st.rerun()
@@ -462,6 +478,7 @@ with tab1:
                         
                         st.session_state.model_data.update(calc_result)
                         st.session_state.scaled_mesh = scaled_mesh
+                        st.session_state.was_scaled = True
                         
                         st.success(f"✅ Converted from {from_unit} to mm")
                         st.rerun()
@@ -475,52 +492,59 @@ with tab1:
         st.markdown("---")
         if st.checkbox("🎨 Show 3D Preview", value=True, key="show_preview"):
             mesh_to_preview = st.session_state.scaled_mesh
+            file_bytes = st.session_state.get('original_file_bytes')
+            file_ext = st.session_state.get('original_file_ext') or ''
+            was_scaled = st.session_state.get('was_scaled', False)
 
-            # Texture-presence hint: helps the user understand why a model
-            # renders solid-colored. STL has no texture support at all; OBJ
-            # without an MTL companion has none; GLB/GLTF embeds them.
-            visual = getattr(mesh_to_preview, 'visual', None)
-            has_uv = getattr(visual, 'uv', None) is not None if visual else False
-            material = getattr(visual, 'material', None) if visual else None
-            has_image = bool(
-                getattr(material, 'baseColorTexture', None) is not None
-                or getattr(material, 'image', None) is not None
-            ) if material else False
-            if has_uv and has_image:
-                st.caption("🖼️ Textured material detected — rendering with embedded texture.")
-            else:
-                st.caption(
-                    "ℹ️ This file does not carry an embedded texture (no UVs / no image). "
-                    "Upload a GLB/GLTF with PBR materials to see textured rendering."
-                )
+            # Decide which GLB to feed <model-viewer>:
+            #   - Unmodified GLB upload  → original bytes (animations preserved)
+            #   - Anything else          → trimesh.export(glb)  (geometry+textures only)
+            use_original_glb = (
+                file_ext == '.glb'
+                and not was_scaled
+                and file_bytes is not None
+            )
 
+            glb_bytes = None
+            note = None
             try:
-                with st.spinner("Generating 3D preview..."):
-                    if HAS_PYVISTA:
-                        plotter = create_pyvista_preview(mesh_to_preview)
-                        # Older stpyvista builds reject use_container_width; pass
-                        # only the args known to be stable across versions and
-                        # let the plotter's window_size govern the canvas size.
-                        stpyvista(plotter, key="pv-preview")
+                with st.spinner("Preparing 3D preview..."):
+                    if use_original_glb:
+                        glb_bytes = file_bytes
+                        note = "🎬 Original GLB — embedded textures and animations preserved."
                     else:
-                        st.info(
-                            "ℹ️ Texture-capable renderer (PyVista) not installed — "
-                            "falling back to flat-shaded preview. "
-                            "Run `pip install -r requirements.txt` to enable textures."
-                        )
-                        fig = create_3d_preview(mesh_to_preview)
-                        st.plotly_chart(fig, use_container_width=True)
+                        glb_bytes = trimesh_to_glb_bytes(mesh_to_preview)
+                        if file_ext in ('.glb', '.gltf') and was_scaled:
+                            note = (
+                                "📐 Scaled geometry — embedded animations are stripped "
+                                "when the mesh is re-exported after scaling."
+                            )
+                        elif file_ext in ('.stl', '.3mf', '.obj'):
+                            note = (
+                                f"ℹ️ {file_ext.lstrip('.').upper()} files do not carry "
+                                "textures or animations by spec — rendering geometry only."
+                            )
             except Exception as e:
-                # If the textured path crashes (e.g. malformed UVs), fall back to Plotly.
-                if HAS_PYVISTA:
-                    st.warning(f"Textured preview failed ({e}); using flat-shaded fallback.")
-                    try:
-                        fig = create_3d_preview(mesh_to_preview)
-                        st.plotly_chart(fig, use_container_width=True)
-                    except Exception as e2:
-                        st.error(f"Error generating preview: {str(e2)}")
-                else:
-                    st.error(f"Error generating preview: {str(e)}")
+                st.error(f"Could not prepare GLB for preview: {e}")
+
+            if glb_bytes is not None:
+                if note:
+                    st.caption(note)
+                # Heuristic: disable auto-rotate when an animation is likely to
+                # play, so the two don't fight. Original GLB → likely animated.
+                auto_rotate = not use_original_glb
+                try:
+                    html = create_model_viewer_html(
+                        glb_bytes,
+                        height=550,
+                        autoplay=True,
+                        auto_rotate=auto_rotate,
+                    )
+                    # components.html height needs to fit the viewer + the small
+                    # hint strip below it; +30 is enough for the 11px caption.
+                    components.html(html, height=580, scrolling=False)
+                except Exception as e:
+                    st.error(f"Error rendering 3D preview: {e}")
     else:
         st.info("👆 Upload a 3D model to get started")
 

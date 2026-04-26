@@ -87,7 +87,13 @@ def load_3d_model(uploaded_file):
                 'success': True,
                 'mesh': mesh,
                 'format': format_name,
-                'file_size': file_size
+                'file_size': file_size,
+                # Raw bytes + extension are kept so the preview layer can
+                # feed the original GLB straight to <model-viewer>, which
+                # preserves embedded animations that trimesh strips during
+                # scene-to-mesh concatenation.
+                'file_bytes': file_bytes,
+                'file_ext': file_ext,
             }
             
         finally:

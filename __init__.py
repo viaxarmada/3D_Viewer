@@ -7,6 +7,8 @@ from .volume_calculator import calculate_volume_and_dimensions, convert_volume
 from .preview_generator import (
     create_3d_preview,
     create_wireframe_preview,
+    create_model_viewer_html,
+    trimesh_to_glb_bytes,
     create_pyvista_preview,
     trimesh_to_pyvista,
 )
@@ -16,6 +18,8 @@ __all__ = [
     'load_3d_model',
     'calculate_volume_and_dimensions',
     'convert_volume',
+    'create_model_viewer_html',
+    'trimesh_to_glb_bytes',
     'create_3d_preview',
     'create_wireframe_preview',
     'create_pyvista_preview',
