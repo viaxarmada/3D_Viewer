@@ -475,11 +475,33 @@ with tab1:
         st.markdown("---")
         if st.checkbox("🎨 Show 3D Preview", value=True, key="show_preview"):
             mesh_to_preview = st.session_state.scaled_mesh
+
+            # Texture-presence hint: helps the user understand why a model
+            # renders solid-colored. STL has no texture support at all; OBJ
+            # without an MTL companion has none; GLB/GLTF embeds them.
+            visual = getattr(mesh_to_preview, 'visual', None)
+            has_uv = getattr(visual, 'uv', None) is not None if visual else False
+            material = getattr(visual, 'material', None) if visual else None
+            has_image = bool(
+                getattr(material, 'baseColorTexture', None) is not None
+                or getattr(material, 'image', None) is not None
+            ) if material else False
+            if has_uv and has_image:
+                st.caption("🖼️ Textured material detected — rendering with embedded texture.")
+            else:
+                st.caption(
+                    "ℹ️ This file does not carry an embedded texture (no UVs / no image). "
+                    "Upload a GLB/GLTF with PBR materials to see textured rendering."
+                )
+
             try:
                 with st.spinner("Generating 3D preview..."):
                     if HAS_PYVISTA:
                         plotter = create_pyvista_preview(mesh_to_preview)
-                        stpyvista(plotter, key="pv-preview", use_container_width=True)
+                        # Older stpyvista builds reject use_container_width; pass
+                        # only the args known to be stable across versions and
+                        # let the plotter's window_size govern the canvas size.
+                        stpyvista(plotter, key="pv-preview")
                     else:
                         st.info(
                             "ℹ️ Texture-capable renderer (PyVista) not installed — "
