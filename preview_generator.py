@@ -170,7 +170,7 @@ def create_model_viewer_html(
     height=550,
     autoplay=True,
     auto_rotate=False,
-    background='#f5f5f5',
+    background='#0f0f0f',
 ):
     """
     Build a self-contained HTML document that renders GLB bytes via
