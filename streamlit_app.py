@@ -655,9 +655,19 @@ else:
                 use_container_width=True, type="primary", key="apply_dims",
             ):
                 try:
+                    # Compute absolute scales from the true-original baseline
+                    # rather than from the currently displayed dims. The
+                    # display can already reflect a prior unit conversion or
+                    # earlier scale, but we always re-apply from original to
+                    # avoid compounding floating-point drift and to match how
+                    # the Scale factor method works.
+                    orig = st.session_state.original_dimensions
+                    abs_x = new_length / orig['length']
+                    abs_y = new_width / orig['width']
+                    abs_z = new_height / orig['height']
                     scaled_mesh = copy.deepcopy(st.session_state.original_mesh)
                     scaled_mesh = apply_non_uniform_scale(
-                        scaled_mesh, x_scale, y_scale, z_scale
+                        scaled_mesh, abs_x, abs_y, abs_z
                     )
                     calc_result = calculate_volume_and_dimensions(scaled_mesh)
                     st.session_state.model_data.update(calc_result)
@@ -720,6 +730,12 @@ else:
                     calc_result = calculate_volume_and_dimensions(scaled_mesh)
                     st.session_state.model_data.update(calc_result)
                     st.session_state.scaled_mesh = scaled_mesh
+                    # Sync the dim-editor inputs to the converted size so the
+                    # default values shown in Edit dimensions reflect what the
+                    # user just produced, not the pre-conversion size.
+                    st.session_state.temp_length = calc_result['length_mm']
+                    st.session_state.temp_width = calc_result['width_mm']
+                    st.session_state.temp_height = calc_result['height_mm']
                     st.session_state.was_scaled = True
                     st.success(f"Converted from {from_unit} to mm")
                     st.rerun()
