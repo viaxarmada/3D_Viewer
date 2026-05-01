@@ -566,7 +566,7 @@ else:
                 )
                 new_length = st.number_input(
                     "Length (mm)",
-                    min_value=0.01, max_value=10000.0,
+                    min_value=0.001,
                     value=float(current_length), step=0.1, format="%.2f",
                     key="dim_length", label_visibility="collapsed",
                 )
@@ -588,14 +588,14 @@ else:
                 if proportional and new_length != current_length:
                     new_width = st.number_input(
                         "Width (mm)",
-                        min_value=0.01, max_value=10000.0,
+                        min_value=0.001,
                         value=float(calculated_width), step=0.1, format="%.2f",
                         key="dim_width", label_visibility="collapsed", disabled=True,
                     )
                 else:
                     new_width = st.number_input(
                         "Width (mm)",
-                        min_value=0.01, max_value=10000.0,
+                        min_value=0.001,
                         value=float(current_width), step=0.1, format="%.2f",
                         key="dim_width", label_visibility="collapsed",
                     )
@@ -609,14 +609,14 @@ else:
                 if proportional and new_length != current_length:
                     new_height = st.number_input(
                         "Height (mm)",
-                        min_value=0.01, max_value=10000.0,
+                        min_value=0.001,
                         value=float(calculated_height), step=0.1, format="%.2f",
                         key="dim_height", label_visibility="collapsed", disabled=True,
                     )
                 else:
                     new_height = st.number_input(
                         "Height (mm)",
-                        min_value=0.01, max_value=10000.0,
+                        min_value=0.001,
                         value=float(current_height), step=0.1, format="%.2f",
                         key="dim_height", label_visibility="collapsed",
                     )
@@ -682,7 +682,7 @@ else:
         elif scale_method == "Scale factor":
             scale_factor = st.number_input(
                 "Scale factor (1.0 = no change)",
-                min_value=0.01, max_value=100.0,
+                min_value=0.001,
                 value=1.0, step=0.1, format="%.2f",
                 key="scale_factor_input",
             )
