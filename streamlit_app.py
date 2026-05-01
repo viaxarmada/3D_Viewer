@@ -19,12 +19,12 @@ import copy
 # Add current directory to Python path (fix for Streamlit Cloud)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-# Try importing from core package, fall back to direct imports
+# Try importing from `core` package first (when checked out as a submodule
+# inside DVA), fall back to flat directory layout (Streamlit Cloud).
 try:
     from core.mesh_loader import load_3d_model
     from core.volume_calculator import calculate_volume_and_dimensions
     from core.preview_generator import (
-        create_3d_preview,
         create_model_viewer_html,
         trimesh_to_glb_bytes,
     )
@@ -33,45 +33,22 @@ try:
         apply_non_uniform_scale,
         apply_dimensional_scale,
         calculate_proportional_dimension,
-        UNIT_CONVERSION_FACTORS
+        UNIT_CONVERSION_FACTORS,
     )
 except ImportError:
-    try:
-        from mesh_loader import load_3d_model
-        from volume_calculator import calculate_volume_and_dimensions
-        from preview_generator import (
-            create_3d_preview,
-            create_model_viewer_html,
-            trimesh_to_glb_bytes,
-        )
-        from scale_handler_enhanced import (
-            apply_scale_factor,
-            apply_non_uniform_scale,
-            apply_dimensional_scale,
-            calculate_proportional_dimension,
-            UNIT_CONVERSION_FACTORS
-        )
-    except ImportError:
-        try:
-            from core.scale_handler import apply_scale_factor, UNIT_CONVERSION_FACTORS
-            def apply_non_uniform_scale(mesh, x, y, z):
-                mesh.apply_scale([x, y, z])
-                return mesh
-            def apply_dimensional_scale(mesh, curr, targ, prop):
-                scales = {'x_scale': targ['length']/curr['length'],
-                         'y_scale': targ['width']/curr['width'],
-                         'z_scale': targ['height']/curr['height']}
-                mesh.apply_scale([scales['x_scale'], scales['y_scale'], scales['z_scale']])
-                return mesh, scales
-            def calculate_proportional_dimension(new, old_changed, old_target):
-                return (new / old_changed) * old_target if old_changed > 0 else old_target
-        except ImportError as e:
-            st.error(f"""
-            **Import Error**
-
-            Cannot find required modules. Error: {str(e)}
-            """)
-            st.stop()
+    from mesh_loader import load_3d_model
+    from volume_calculator import calculate_volume_and_dimensions
+    from preview_generator import (
+        create_model_viewer_html,
+        trimesh_to_glb_bytes,
+    )
+    from scale_handler_enhanced import (
+        apply_scale_factor,
+        apply_non_uniform_scale,
+        apply_dimensional_scale,
+        calculate_proportional_dimension,
+        UNIT_CONVERSION_FACTORS,
+    )
 
 # ── Page config ─────────────────────────────────────────────────────────────
 st.set_page_config(

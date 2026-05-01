@@ -4,9 +4,13 @@ Mesh Loader Module
 Load 3D model files in various formats using trimesh.
 """
 
-import trimesh
-import tempfile
+import logging
 import os
+import tempfile
+
+import trimesh
+
+logger = logging.getLogger(__name__)
 
 
 def load_3d_model(uploaded_file):
@@ -97,11 +101,10 @@ def load_3d_model(uploaded_file):
             }
             
         finally:
-            # Clean up temp file
             try:
                 os.unlink(tmp_path)
-            except:
-                pass
+            except OSError as cleanup_err:
+                logger.warning("Failed to remove temp file %s: %s", tmp_path, cleanup_err)
                 
     except Exception as e:
         return {
