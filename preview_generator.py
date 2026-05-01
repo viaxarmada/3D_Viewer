@@ -6,9 +6,28 @@ embedded in a self-contained HTML document. Renders GLB/GLTF directly —
 supports PBR textures, normal maps, and embedded animations. Non-GLB inputs
 are converted to GLB on the fly through trimesh so they share the same
 render path.
+
+The model-viewer library is bundled locally (vendor/) and inlined into the
+iframe HTML, so the preview works in environments where CDNs are blocked
+(corporate firewalls, sandboxed deploys, restrictive CSPs, offline use).
 """
 
 import base64
+import os
+
+
+_VENDOR_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'vendor')
+_MODEL_VIEWER_LIB_PATH = os.path.join(_VENDOR_DIR, 'model-viewer-3.5.0.umd.min.js')
+
+
+def _load_model_viewer_lib():
+    with open(_MODEL_VIEWER_LIB_PATH, 'r', encoding='utf-8') as f:
+        return f.read()
+
+
+# Read once at import time. ~910 KB — fine to keep in memory; reading on
+# every preview render would be wasteful since this never changes.
+_MODEL_VIEWER_LIB = _load_model_viewer_lib()
 
 
 # HTML template for the model-viewer embed. Uses placeholder tokens
@@ -66,89 +85,66 @@ _MODEL_VIEWER_TEMPLATE = r"""<!DOCTYPE html>
     </model-viewer>
     <div class="hint">drag to orbit · scroll to zoom · animations autoplay</div>
   </div>
-  <script type="module">
-    // Fallback chain — first CDN that successfully registers the
-    // <model-viewer> custom element wins. Order: jsdelivr (most
-    // reliable globally), unpkg, googleapis.
-    const CDNS = [
-      'https://cdn.jsdelivr.net/npm/@google/model-viewer@3.5.0/dist/model-viewer.min.js',
-      'https://unpkg.com/@google/model-viewer@3.5.0/dist/model-viewer.min.js',
-      'https://ajax.googleapis.com/ajax/libs/model-viewer/3.5.0/model-viewer.min.js'
-    ];
 
-    const statusEl = document.getElementById('status');
-    const mv = document.getElementById('mv');
+  <!-- Bundled @google/model-viewer 3.5.0 UMD build, BSD-3-Clause licensed.
+       Inlined here so the preview works without CDN access. -->
+  <script>__MV_LIB__</script>
 
-    function setStatus(msg, isError) {
-      statusEl.textContent = msg;
-      statusEl.classList.toggle('error', !!isError);
-      statusEl.classList.remove('hidden');
-    }
-    function hideStatus() {
-      statusEl.classList.add('hidden');
-    }
+  <script>
+    (function () {
+      const statusEl = document.getElementById('status');
+      const mv = document.getElementById('mv');
 
-    async function loadLibrary() {
-      let lastErr = null;
-      for (const url of CDNS) {
-        try {
-          setStatus('Loading viewer library…');
-          await import(url);
-          if (customElements.get('model-viewer')) {
-            return url;
-          }
-          lastErr = new Error('Loaded but custom element not registered');
-        } catch (e) {
-          lastErr = e;
-          // eslint-disable-next-line no-console
-          console.warn('[model-viewer] CDN failed:', url, e);
+      function setStatus(msg, isError) {
+        statusEl.textContent = msg;
+        statusEl.classList.toggle('error', !!isError);
+        statusEl.classList.remove('hidden');
+      }
+      function hideStatus() {
+        statusEl.classList.add('hidden');
+      }
+
+      function b64ToBlob(b64, mime) {
+        // Decode in chunks so very large GLBs don't blow the call stack.
+        const CHUNK = 0x8000;
+        const bin = atob(b64);
+        const len = bin.length;
+        const bytes = new Uint8Array(len);
+        for (let i = 0; i < len; i += CHUNK) {
+          const end = Math.min(i + CHUNK, len);
+          for (let j = i; j < end; j++) bytes[j] = bin.charCodeAt(j);
         }
+        return new Blob([bytes], { type: mime });
       }
-      throw lastErr || new Error('All CDNs failed.');
-    }
 
-    function b64ToBlob(b64, mime) {
-      // Decode in chunks so very large GLBs don't blow the call stack.
-      const CHUNK = 0x8000;
-      const bin = atob(b64);
-      const len = bin.length;
-      const bytes = new Uint8Array(len);
-      for (let i = 0; i < len; i += CHUNK) {
-        const end = Math.min(i + CHUNK, len);
-        for (let j = i; j < end; j++) bytes[j] = bin.charCodeAt(j);
-      }
-      return new Blob([bytes], { type: mime });
-    }
+      // Embedded GLB payload (base64).
+      const GLB_B64 = "__GLB_B64__";
 
-    // Embedded GLB payload (base64). Inlined here so the iframe is
-    // fully self-contained — no second network round-trip.
-    const GLB_B64 = "__GLB_B64__";
-
-    (async () => {
       try {
-        const cdn = await loadLibrary();
+        if (!customElements.get('model-viewer')) {
+          throw new Error('model-viewer custom element not registered');
+        }
         setStatus('Decoding model…');
         const blob = b64ToBlob(GLB_B64, 'model/gltf-binary');
         const objectUrl = URL.createObjectURL(blob);
-        // Switching to a blob URL avoids the 2–4 MB data-URL ceiling
-        // some browsers enforce on iframe contexts and is much faster
-        // for the renderer to fetch.
+        // Blob URL avoids the data-URL size ceiling some browsers enforce
+        // on iframe contexts and is much faster for the renderer to fetch.
         mv.src = objectUrl;
         setStatus('Rendering…');
       } catch (e) {
-        setStatus('Could not load 3D viewer: ' + (e && e.message ? e.message : e), true);
+        setStatus('Could not initialize 3D viewer: ' + (e && e.message ? e.message : e), true);
       }
-    })();
 
-    mv.addEventListener('load', () => hideStatus());
-    mv.addEventListener('error', (ev) => {
-      const detail = ev && ev.detail;
-      const msg =
-        (detail && detail.sourceError && detail.sourceError.message) ||
-        (detail && detail.type) ||
-        'unknown error';
-      setStatus('Model failed to render: ' + msg, true);
-    });
+      mv.addEventListener('load', () => hideStatus());
+      mv.addEventListener('error', (ev) => {
+        const detail = ev && ev.detail;
+        const msg =
+          (detail && detail.sourceError && detail.sourceError.message) ||
+          (detail && detail.type) ||
+          'unknown error';
+        setStatus('Model failed to render: ' + msg, true);
+      });
+    })();
   </script>
 </body>
 </html>
@@ -164,16 +160,8 @@ def create_model_viewer_html(
 ):
     """
     Build a self-contained HTML document that renders GLB bytes via
-    Google's <model-viewer> web component.
-
-    Robustness features:
-      - Multi-CDN fallback chain (jsdelivr → unpkg → googleapis).
-      - Blob URL src (avoids the data-URL size ceiling and parses faster
-        than base64 for the renderer).
-      - Status overlay that surfaces library-load and model-load errors
-        in the iframe so failures are diagnosable instead of silent.
-      - load / error event listeners that hide the overlay on success
-        and show the actual model-viewer error message on failure.
+    Google's <model-viewer> web component, with the library inlined so
+    no CDN access is required.
 
     Capabilities:
       - PBR textures (baseColor, metallic-roughness, normal, emissive,
@@ -203,8 +191,9 @@ def create_model_viewer_html(
         .replace('__BG__', background)
         .replace('__AUTOPLAY__', autoplay_attr)
         .replace('__AUTOROTATE__', auto_rotate_attr)
-        # Replace the (huge) base64 payload last so the previous small
-        # substitutions are cheap.
+        # Replace the large payloads last so earlier small substitutions
+        # don't have to scan past them.
+        .replace('__MV_LIB__', _MODEL_VIEWER_LIB)
         .replace('__GLB_B64__', b64)
     )
 
