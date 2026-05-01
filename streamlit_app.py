@@ -19,12 +19,12 @@ import copy
 # Add current directory to Python path (fix for Streamlit Cloud)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-# Try importing from core package, fall back to direct imports
+# Try importing from `core` package first (when checked out as a submodule
+# inside DVA), fall back to flat directory layout (Streamlit Cloud).
 try:
     from core.mesh_loader import load_3d_model
     from core.volume_calculator import calculate_volume_and_dimensions
     from core.preview_generator import (
-        create_3d_preview,
         create_model_viewer_html,
         trimesh_to_glb_bytes,
     )
@@ -33,45 +33,22 @@ try:
         apply_non_uniform_scale,
         apply_dimensional_scale,
         calculate_proportional_dimension,
-        UNIT_CONVERSION_FACTORS
+        UNIT_CONVERSION_FACTORS,
     )
 except ImportError:
-    try:
-        from mesh_loader import load_3d_model
-        from volume_calculator import calculate_volume_and_dimensions
-        from preview_generator import (
-            create_3d_preview,
-            create_model_viewer_html,
-            trimesh_to_glb_bytes,
-        )
-        from scale_handler_enhanced import (
-            apply_scale_factor,
-            apply_non_uniform_scale,
-            apply_dimensional_scale,
-            calculate_proportional_dimension,
-            UNIT_CONVERSION_FACTORS
-        )
-    except ImportError:
-        try:
-            from core.scale_handler import apply_scale_factor, UNIT_CONVERSION_FACTORS
-            def apply_non_uniform_scale(mesh, x, y, z):
-                mesh.apply_scale([x, y, z])
-                return mesh
-            def apply_dimensional_scale(mesh, curr, targ, prop):
-                scales = {'x_scale': targ['length']/curr['length'],
-                         'y_scale': targ['width']/curr['width'],
-                         'z_scale': targ['height']/curr['height']}
-                mesh.apply_scale([scales['x_scale'], scales['y_scale'], scales['z_scale']])
-                return mesh, scales
-            def calculate_proportional_dimension(new, old_changed, old_target):
-                return (new / old_changed) * old_target if old_changed > 0 else old_target
-        except ImportError as e:
-            st.error(f"""
-            **Import Error**
-
-            Cannot find required modules. Error: {str(e)}
-            """)
-            st.stop()
+    from mesh_loader import load_3d_model
+    from volume_calculator import calculate_volume_and_dimensions
+    from preview_generator import (
+        create_model_viewer_html,
+        trimesh_to_glb_bytes,
+    )
+    from scale_handler_enhanced import (
+        apply_scale_factor,
+        apply_non_uniform_scale,
+        apply_dimensional_scale,
+        calculate_proportional_dimension,
+        UNIT_CONVERSION_FACTORS,
+    )
 
 # ── Page config ─────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -589,7 +566,7 @@ else:
                 )
                 new_length = st.number_input(
                     "Length (mm)",
-                    min_value=0.01, max_value=10000.0,
+                    min_value=0.001,
                     value=float(current_length), step=0.1, format="%.2f",
                     key="dim_length", label_visibility="collapsed",
                 )
@@ -611,14 +588,14 @@ else:
                 if proportional and new_length != current_length:
                     new_width = st.number_input(
                         "Width (mm)",
-                        min_value=0.01, max_value=10000.0,
+                        min_value=0.001,
                         value=float(calculated_width), step=0.1, format="%.2f",
                         key="dim_width", label_visibility="collapsed", disabled=True,
                     )
                 else:
                     new_width = st.number_input(
                         "Width (mm)",
-                        min_value=0.01, max_value=10000.0,
+                        min_value=0.001,
                         value=float(current_width), step=0.1, format="%.2f",
                         key="dim_width", label_visibility="collapsed",
                     )
@@ -632,14 +609,14 @@ else:
                 if proportional and new_length != current_length:
                     new_height = st.number_input(
                         "Height (mm)",
-                        min_value=0.01, max_value=10000.0,
+                        min_value=0.001,
                         value=float(calculated_height), step=0.1, format="%.2f",
                         key="dim_height", label_visibility="collapsed", disabled=True,
                     )
                 else:
                     new_height = st.number_input(
                         "Height (mm)",
-                        min_value=0.01, max_value=10000.0,
+                        min_value=0.001,
                         value=float(current_height), step=0.1, format="%.2f",
                         key="dim_height", label_visibility="collapsed",
                     )
@@ -678,9 +655,19 @@ else:
                 use_container_width=True, type="primary", key="apply_dims",
             ):
                 try:
+                    # Compute absolute scales from the true-original baseline
+                    # rather than from the currently displayed dims. The
+                    # display can already reflect a prior unit conversion or
+                    # earlier scale, but we always re-apply from original to
+                    # avoid compounding floating-point drift and to match how
+                    # the Scale factor method works.
+                    orig = st.session_state.original_dimensions
+                    abs_x = new_length / orig['length']
+                    abs_y = new_width / orig['width']
+                    abs_z = new_height / orig['height']
                     scaled_mesh = copy.deepcopy(st.session_state.original_mesh)
                     scaled_mesh = apply_non_uniform_scale(
-                        scaled_mesh, x_scale, y_scale, z_scale
+                        scaled_mesh, abs_x, abs_y, abs_z
                     )
                     calc_result = calculate_volume_and_dimensions(scaled_mesh)
                     st.session_state.model_data.update(calc_result)
@@ -695,7 +682,7 @@ else:
         elif scale_method == "Scale factor":
             scale_factor = st.number_input(
                 "Scale factor (1.0 = no change)",
-                min_value=0.01, max_value=100.0,
+                min_value=0.001,
                 value=1.0, step=0.1, format="%.2f",
                 key="scale_factor_input",
             )
@@ -743,6 +730,12 @@ else:
                     calc_result = calculate_volume_and_dimensions(scaled_mesh)
                     st.session_state.model_data.update(calc_result)
                     st.session_state.scaled_mesh = scaled_mesh
+                    # Sync the dim-editor inputs to the converted size so the
+                    # default values shown in Edit dimensions reflect what the
+                    # user just produced, not the pre-conversion size.
+                    st.session_state.temp_length = calc_result['length_mm']
+                    st.session_state.temp_width = calc_result['width_mm']
+                    st.session_state.temp_height = calc_result['height_mm']
                     st.session_state.was_scaled = True
                     st.success(f"Converted from {from_unit} to mm")
                     st.rerun()

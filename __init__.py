@@ -3,28 +3,29 @@ Core modules for 3D Volume Calculator
 """
 
 from .mesh_loader import load_3d_model
-from .volume_calculator import calculate_volume_and_dimensions, convert_volume
+from .volume_calculator import calculate_volume_and_dimensions
 from .preview_generator import (
-    create_3d_preview,
-    create_wireframe_preview,
     create_model_viewer_html,
     trimesh_to_glb_bytes,
-    create_pyvista_preview,
-    trimesh_to_pyvista,
 )
-from .scale_handler import apply_scale_factor, convert_mesh_units, UNIT_CONVERSION_FACTORS
+from .scale_handler_enhanced import (
+    apply_scale_factor,
+    apply_non_uniform_scale,
+    apply_dimensional_scale,
+    calculate_proportional_dimension,
+    convert_mesh_units,
+    UNIT_CONVERSION_FACTORS,
+)
 
 __all__ = [
     'load_3d_model',
     'calculate_volume_and_dimensions',
-    'convert_volume',
     'create_model_viewer_html',
     'trimesh_to_glb_bytes',
-    'create_3d_preview',
-    'create_wireframe_preview',
-    'create_pyvista_preview',
-    'trimesh_to_pyvista',
     'apply_scale_factor',
+    'apply_non_uniform_scale',
+    'apply_dimensional_scale',
+    'calculate_proportional_dimension',
     'convert_mesh_units',
-    'UNIT_CONVERSION_FACTORS'
+    'UNIT_CONVERSION_FACTORS',
 ]

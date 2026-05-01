@@ -53,29 +53,3 @@ def calculate_volume_and_dimensions(mesh):
         'triangles': triangle_count,
         'vertices': vertex_count
     }
-
-
-def convert_volume(volume_mm3, to_unit='cubic_cm'):
-    """
-    Convert volume from mm³ to other units.
-    
-    Args:
-        volume_mm3: Volume in cubic millimeters
-        to_unit: Target unit ('cubic_cm', 'cubic_inches', 'cubic_meters', 'liters')
-        
-    Returns:
-        float: Converted volume
-    """
-    conversions = {
-        'cubic_mm': 1.0,
-        'cubic_cm': 0.001,
-        'cubic_inches': 0.0000610237,
-        'cubic_meters': 1e-9,
-        'liters': 0.000001,
-        'milliliters': 0.001
-    }
-    
-    if to_unit not in conversions:
-        raise ValueError(f"Unknown unit: {to_unit}")
-    
-    return volume_mm3 * conversions[to_unit]
