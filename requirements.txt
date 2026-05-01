@@ -7,6 +7,7 @@ streamlit>=1.28.0
 trimesh>=3.20.0
 numpy>=1.24.0
 networkx>=2.8
+scipy>=1.10.0           # Required by trimesh GLB export when meshes carry face/vertex colors
 
 # Texture image decoding (also a transitive trimesh dep; pinned for clarity)
 pillow>=9.0.0
